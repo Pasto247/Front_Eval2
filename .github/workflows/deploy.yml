@@ -1,0 +1,52 @@
+name: Deploy Frontend to ECR and EC2
+
+on:
+  push:
+    branches: [ deploy ] # Se ejecuta solo al hacer push a la rama 'deploy'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout del código
+      uses: actions/checkout@v3
+
+    - name: Configurar credenciales AWS (Vocareum / Academy)
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }} # Obligatorio para cuentas de estudiante
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Iniciar sesión en Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Build, tag, and push a ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: frontend-ep2 # <-- Apunta al ECR de tu frontend
+        IMAGE_TAG: latest
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+    - name: Desplegar en EC2
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ubuntu
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          # 1. Loguear Docker dentro de la EC2 con ECR
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+          
+          # 2. Ir a la carpeta principal del proyecto
+          cd ~/Proyecto_DevOps
+          
+          # 3. Descargar la nueva imagen del Frontend
+          sudo docker-compose pull frontend
+          
+          # 4. Reiniciar SOLO el contenedor del frontend con la imagen nueva
+          sudo docker-compose up -d --no-deps frontend
